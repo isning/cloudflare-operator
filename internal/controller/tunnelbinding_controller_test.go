@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/onsi/gomega"
 	"gopkg.in/yaml.v3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -40,8 +41,10 @@ func TestGetConfigForSubject(t *testing.T) {
 			target:   "http_status:404",
 		},
 		{
-			name:     "explicit target ignores Service ports and protocol",
-			spec:     networkingv1alpha1.TunnelBindingSubjectSpec{Fqdn: "app.example.com", Target: "http://gateway.other.svc:8080", Protocol: "https"},
+			name: "explicit target ignores Service ports and protocol",
+			spec: networkingv1alpha1.TunnelBindingSubjectSpec{
+				Fqdn: "app.example.com", Target: "http://gateway.other.svc:8080", Protocol: "https",
+			},
 			service:  &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"}},
 			hostname: "app.example.com",
 			target:   "http://gateway.other.svc:8080",
@@ -63,10 +66,9 @@ func TestGetConfigForSubject(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			g := gomega.NewWithT(t)
 			scheme := runtime.NewScheme()
-			if err := corev1.AddToScheme(scheme); err != nil {
-				t.Fatal(err)
-			}
+			g.Expect(corev1.AddToScheme(scheme)).To(gomega.Succeed())
 			builder := fake.NewClientBuilder().WithScheme(scheme)
 			if tc.service != nil {
 				builder.WithObjects(tc.service)
@@ -80,22 +82,18 @@ func TestGetConfigForSubject(t *testing.T) {
 				cfAPI:    &cf.API{Domain: "example.com"},
 			}
 			hostname, target, err := reconciler.getConfigForSubject(networkingv1alpha1.TunnelBindingSubject{Name: "app", Spec: tc.spec})
-			if (err != nil) != tc.wantError {
-				t.Fatalf("error = %v, wantError = %v", err, tc.wantError)
-			}
-			if hostname != tc.hostname || target != tc.target {
-				t.Fatalf("got (%q, %q), want (%q, %q)", hostname, target, tc.hostname, tc.target)
-			}
+			g.Expect(err != nil).To(gomega.Equal(tc.wantError), "error = %v", err)
+			g.Expect(hostname).To(gomega.Equal(tc.hostname))
+			g.Expect(target).To(gomega.Equal(tc.target))
 		})
 	}
 }
 
 func TestTunnelBindingExplicitTargetStatusMatchesConfiguration(t *testing.T) {
+	g := gomega.NewWithT(t)
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, appsv1.AddToScheme, networkingv1alpha1.AddToScheme} {
-		if err := add(scheme); err != nil {
-			t.Fatal(err)
-		}
+		g.Expect(add(scheme)).To(gomega.Succeed())
 	}
 	binding := &networkingv1alpha1.TunnelBinding{
 		TypeMeta: metav1.TypeMeta{APIVersion: networkingv1alpha1.GroupVersion.String(), Kind: "TunnelBinding"},
@@ -126,29 +124,20 @@ func TestTunnelBindingExplicitTargetStatusMatchesConfiguration(t *testing.T) {
 		configmap:      config,
 		fallbackTarget: "http_status:404",
 	}
-	if err := reconciler.setStatus(); err != nil {
-		t.Fatalf("set status: %v", err)
-	}
+	g.Expect(reconciler.setStatus()).To(gomega.Succeed())
 	select {
 	case event := <-recorder.Events:
 		t.Fatalf("unexpected event while resolving explicit target: %s", event)
 	default:
 	}
-	if err := reconciler.configureCloudflareDaemon(); err != nil {
-		t.Fatalf("configure cloudflared: %v", err)
-	}
+	g.Expect(reconciler.configureCloudflareDaemon()).To(gomega.Succeed())
 	stored := &networkingv1alpha1.TunnelBinding{}
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(binding), stored); err != nil {
-		t.Fatal(err)
-	}
-	if len(stored.Status.Services) != 1 || stored.Status.Services[0].Target != binding.Subjects[0].Spec.Target {
-		t.Fatalf("unexpected status: %+v", stored.Status)
-	}
+	g.Expect(c.Get(context.Background(), client.ObjectKeyFromObject(binding), stored)).To(gomega.Succeed())
+	g.Expect(stored.Status.Services).To(gomega.HaveLen(1))
+	g.Expect(stored.Status.Services[0].Target).To(gomega.Equal(binding.Subjects[0].Spec.Target))
 	var generated cf.Configuration
-	if err := yaml.Unmarshal([]byte(reconciler.configmap.Data[configmapKey]), &generated); err != nil {
-		t.Fatal(err)
-	}
-	if len(generated.Ingress) != 2 || generated.Ingress[0].Service != stored.Status.Services[0].Target || generated.Ingress[0].Hostname != stored.Status.Services[0].Hostname {
-		t.Fatalf("configuration does not match status: %+v", generated.Ingress)
-	}
+	g.Expect(yaml.Unmarshal([]byte(reconciler.configmap.Data[configmapKey]), &generated)).To(gomega.Succeed())
+	g.Expect(generated.Ingress).To(gomega.HaveLen(2))
+	g.Expect(generated.Ingress[0].Service).To(gomega.Equal(stored.Status.Services[0].Target))
+	g.Expect(generated.Ingress[0].Hostname).To(gomega.Equal(stored.Status.Services[0].Hostname))
 }

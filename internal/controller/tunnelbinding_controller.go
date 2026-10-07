@@ -436,6 +436,10 @@ func (r TunnelBindingReconciler) getConfigForSubject(subject networkingv1alpha1.
 		r.log.Info("using default domain value", "domain", r.cfAPI.Domain)
 	}
 
+	if subject.Spec.Target != "" {
+		return hostname, subject.Spec.Target, nil
+	}
+
 	service := &corev1.Service{}
 	if err := r.Get(r.ctx, apitypes.NamespacedName{Name: subject.Name, Namespace: r.binding.Namespace}, service); err != nil {
 		r.log.Error(err, "Error getting referenced service")
